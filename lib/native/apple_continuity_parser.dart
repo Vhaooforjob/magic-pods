@@ -33,20 +33,26 @@ class AppleContinuityParser {
   /// Returns `null` when the data is not an Apple Continuity advert
   /// or cannot be decoded.
   static ParsedAppleData? parse(Uint8List rawData) {
-    if (rawData.length < 10) return null;
+    if (rawData.length < 5) return null;
 
-    // Byte 0-1: Company ID (little-endian). Already filtered upstream
-    // when we use the BLE watcher, but double-check here.
-    final companyId = rawData[0] | (rawData[1] << 8);
-    if (companyId != appleCompanyId) return null;
+    int offset = 0;
+    
+    // Check if the data starts with Apple Company ID (0x004C).
+    // Some BLE APIs include it, others (like Windows) provide only the payload.
+    if (rawData.length >= 2) {
+      final firstTwo = rawData[0] | (rawData[1] << 8);
+      if (firstTwo == appleCompanyId) {
+        offset = 2;
+      }
+    }
 
     // Look for the Proximity Pairing sub-TLV inside the payload.
-    int offset = 2;
     while (offset < rawData.length - 2) {
       final type = rawData[offset];
       final length = rawData[offset + 1];
 
-      if (type == proximityPairingType && length >= 0x19 && offset + length + 2 <= rawData.length) {
+      // Proximity Pairing (0x07) can vary in length (usually 25-27 bytes).
+      if (type == proximityPairingType && length >= 0x15 && offset + length + 2 <= rawData.length) {
         return _parseProximityPairing(rawData, offset + 2);
       }
       offset += 2 + length;
@@ -55,7 +61,7 @@ class AppleContinuityParser {
   }
 
   static ParsedAppleData? _parseProximityPairing(Uint8List data, int start) {
-    if (start + 25 > data.length) return null;
+    if (start + 15 > data.length) return null;
 
     // Bytes 0-1 relative to `start`: device model (16-bit).
     final modelHigh = data[start];
@@ -65,34 +71,41 @@ class AppleContinuityParser {
     // Byte 2: UPI (status flags).
     final status = data[start + 2];
 
-    // Byte 5-7: Battery values.  Each nibble pair contains:
-    //   bits 0-3 = level (0-10, multiply by 10 for %)
-    //   bit 4    = charging flag
-    // The high nibble of byte 5 is left, low nibble is right.
-    // Byte 6 high nibble is case.
-    // (layout varies slightly; use the most common interpretation)
-    final batteryByte1 = data[start + 5];
-    final batteryByte2 = data[start + 6];
+    // AirPods 4 and Pro 2 often use different offsets for high-res battery data.
+    final isNewModel = modelCode == 0x2029 || modelCode == 0x202A || modelCode == 0x2014;
+    
+    int batteryLeft, batteryRight, batteryCase;
 
-    int rawLeft = (batteryByte1 >> 4) & 0x0F;
-    int rawRight = batteryByte1 & 0x0F;
-    int rawCase = (batteryByte2 >> 4) & 0x0F;
+    if (isNewModel && data.length >= start + 15) {
+      // High-resolution battery (0-100) at bytes 12, 13, 14.
+      // High bit often indicates charging or unknown.
+      int l = data[start + 12] & 0x7F;
+      int r = data[start + 13] & 0x7F;
+      int c = data[start + 14] & 0x7F;
+      
+      batteryLeft = (l > 100) ? -1 : l;
+      batteryRight = (r > 100) ? -1 : r;
+      batteryCase = (c > 100) ? -1 : c;
+    } else {
+      // Standard layout: Byte 3=Left, Byte 4=Right, Byte 5=Case (0-10 scale).
+      int rawLeft = data[start + 3] & 0x0F;
+      int rawRight = data[start + 4] & 0x0F;
+      int rawCase = data[start + 5] & 0x0F;
 
-    final chargingByte = data[start + 7];
+      batteryLeft = rawLeft == 15 ? -1 : (rawLeft * 10).clamp(0, 100);
+      batteryRight = rawRight == 15 ? -1 : (rawRight * 10).clamp(0, 100);
+      batteryCase = rawCase == 15 ? -1 : (rawCase * 10).clamp(0, 100);
+    }
+
+    final chargingByte = data[start + 6];
     bool isLeftCharging = (chargingByte & 0x01) != 0;
     bool isRightCharging = (chargingByte & 0x02) != 0;
     bool isCaseCharging = (chargingByte & 0x04) != 0;
 
-    // A raw value of 15 (0xF) means "disconnected / unknown".
-    int batteryLeft = rawLeft == 15 ? -1 : rawLeft * 10;
-    int batteryRight = rawRight == 15 ? -1 : rawRight * 10;
-    int batteryCase = rawCase == 15 ? -1 : rawCase * 10;
-
-    // Status nibbles for ear detection.
-    // Bit 1 of status → primary in-ear, Bit 3 → secondary in-ear.
+    // Status byte (Byte 2) contains ear detection and lid state.
+    // Bit 1 → primary in-ear, Bit 3 → secondary in-ear, Bit 2 → lid open.
     bool primaryInEar = (status & 0x02) != 0;
     bool secondaryInEar = (status & 0x08) != 0;
-    // Bit 4 → both in case / lid open.
     bool lidOpen = (status & 0x04) != 0;
 
     // Detect whether left/right are flipped (common in Apple protocol).

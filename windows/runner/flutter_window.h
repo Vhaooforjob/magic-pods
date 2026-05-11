@@ -7,6 +7,9 @@
 #include <memory>
 
 #include "win32_window.h"
+#include "ble_scanner.h"
+#include "audio_manager.h"
+#include "bluetooth_manager.h"
 
 // A window that does nothing but host a Flutter view.
 class FlutterWindow : public Win32Window {
@@ -28,6 +31,11 @@ class FlutterWindow : public Win32Window {
 
   // The Flutter instance hosted by this window.
   std::unique_ptr<flutter::FlutterViewController> flutter_controller_;
+
+  // Real implementations
+  std::unique_ptr<BleScanner> ble_scanner_;
+  std::unique_ptr<AudioManager> audio_manager_;
+  std::unique_ptr<BluetoothManager> bluetooth_manager_;
 };
 
 #endif  // RUNNER_FLUTTER_WINDOW_H_

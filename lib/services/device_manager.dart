@@ -53,6 +53,11 @@ class DeviceManager {
   Future<void> init() async {
     _log.i('DeviceManager: initialising');
     _scanSub = _bleScanner.deviceStream.listen(_onDeviceUpdate);
+    
+    // Emit initial empty state so UI can show "Scanning" instead of "Loading"
+    _emitDevices();
+    _emitActiveDevice();
+
     await _bleScanner.startScan();
 
     // Periodically prune stale devices.
@@ -100,9 +105,6 @@ class DeviceManager {
         : device;
 
     _devices[device.address] = merged;
-
-    // Auto-select the first device.
-    _activeDeviceAddress ??= device.address;
 
     _emitDevices();
     if (device.address == _activeDeviceAddress) {

@@ -24,7 +24,7 @@ class BleScanner {
   bool get isScanning => _isScanning;
 
   Timer? _simulationTimer;
-  bool _useSimulation = true; // flip when native layer is ready
+  bool _useSimulation = false; // Start with false, fallback to true only if native fails
 
   final _controller = StreamController<BluetoothHeadphone>.broadcast();
 
@@ -49,6 +49,15 @@ class BleScanner {
       _useSimulation = true;
       _startSimulation();
     }
+  }
+
+  /// Restart the scan.
+  Future<void> refreshScan() async {
+    _log.i('BleScanner: refreshing scan');
+    await stopScan();
+    // Brief delay to ensure native stack resets
+    await Future.delayed(const Duration(milliseconds: 500));
+    await startScan();
   }
 
   /// Stop scanning.
@@ -128,7 +137,7 @@ class BleScanner {
 
       final device = BluetoothHeadphone(
         address: 'AA:BB:CC:DD:EE:FF',
-        name: 'AirPods Pro',
+        name: 'AirPods',
         model: HeadphoneModel.airpodsPro2,
         batteryLeft: baseBattery + rng.nextInt(10),
         batteryRight: baseBattery + rng.nextInt(10) - 3,
